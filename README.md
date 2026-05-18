@@ -104,6 +104,35 @@ Nextcloud AIO Master Container
 - Ubuntu 24.04 LTS EC2 instance (t3.small minimum)
 - Docker Engine installed
 
+  
+
+### ☁️ AWS Configurations
+ 
+### Step 1 — AWS EC2 Setup
+ 
+**EC2 Instance Configuration:**
+ 
+| Setting | Value |
+|---|---|
+| Name | `your-instance` |
+| AMI | Ubuntu Server 24.04 LTS (HVM) |
+| AMI ID | `ami-05cf1e9f73fbad2e2` |
+| Instance Type | `t3.small` (2 vCPU, 2 GB RAM) |
+| Region | us-east-1 (N. Virginia) |
+| Storage | 30 GB gp3 |
+| Key Pair | `your-instance.pem` |
+
+ 
+**Security Group**
+ 
+| Port | Protocol | Source | Purpose |
+|---|---|---|---|
+| 22 | TCP | My IP | SSH admin access |
+| 80 | TCP | Anywhere | HTTP web traffic |
+| 443 | TCP | Anywhere | HTTPS web traffic |
+| 8080 | TCP | My IP | Nextcloud AIO dashboard |
+| 8443 | TCP | My IP | Nextcloud AIO dashboard HTTPS |
+
 
 ### SSH Into the Instance
 
