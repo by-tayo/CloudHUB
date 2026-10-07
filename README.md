@@ -194,7 +194,6 @@ My main machine didn't have the free space, so I repurposed a Surface Book 3. It
 | Port | Protocol | Source | Purpose |
 |---|---|---|---|
 | 22 | TCP | My IP | SSH admin access |
-| 80 | TCP | Anywhere | HTTP web traffic |
 | 443 | TCP | Anywhere | HTTPS web traffic |
 | 8080 | TCP | My IP | Nextcloud AIO dashboard |
 | 8443 | TCP | My IP | Nextcloud AIO dashboard HTTPS |
