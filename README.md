@@ -9,7 +9,7 @@
 
 ---
 
-> My personal productivity workspace a self-hosted Nextcloud instance running on AWS EC2, secured with Tailscale VPN and deployed via Docker. Expanded into a hybrid setup, with bulk storage on a home TrueNAS SCALE server reached over the same tailnet.
+> My personal productivity workspace a self-hosted Nextcloud instance running on AWS EC2, secured with Tailscale VPN and deployed via Docker. Now expanding into a hybrid setup, with bulk storage on a home TrueNAS SCALE server reached over the same tailnet.
 
 ![Nextcloud](https://img.shields.io/badge/Nextcloud-0082C9?style=for-the-badge&logo=nextcloud&logoColor=white)
 ![AWS](https://img.shields.io/badge/AWS_EC2-FF9900?style=for-the-badge&logo=amazonaws&logoColor=white)
@@ -27,12 +27,9 @@ CloudHUB is what I call my personal Nextcloud instance my private, self-hosted a
 
 It runs on AWS EC2, is accessible only through Tailscale VPN, and serves as my central hub for all productivity work from writing and file management to video calls and collaborative documents.
 
---- 
+**What's new:** the EC2 instance runs on a 30 GB EBS volume, so I'm adding a home **TrueNAS SCALE** server as a second storage tier. Nextcloud on EC2 stays the single front door; the TrueNAS share is mounted into it as external storage over Tailscale, so nothing on my home network is exposed to the internet.
 
-### What's new?
-
-### 🧱 Hybrid Storage
-30 GB of cloud storage fills up fast. Rather than pay for a larger EBS volume, I set up a TrueNAS SCALE server at home and mounted its share in Nextcloud over Tailscale. Users still access everything through CloudHUB on EC2, with no ports exposed on my home network.
+> **Status (Oct 2026):** after closing my original AWS account, I rebuilt CloudHUB on a new hardened account (root MFA, an IAM Identity Center admin login, and a $25 monthly budget alert) in us-east-2. Nextcloud on EC2 now mounts the home TrueNAS share over Tailscale, verified with reads and writes in both directions. See the **Roadmap** for what's next.
 
 ---
 
@@ -73,12 +70,12 @@ Nextcloud AIO Master Container
 ### Infrastructure
 | Component | Technology |
 |---|---|
-| Cloud Provider | AWS EC2 (t3.small, us-east-1) |
+| Cloud Provider | AWS EC2 (t3.small, us-east-2) |
 | OS | Ubuntu Server 24.04 LTS |
 | Storage | 30 GB gp3 EBS Volume |
-| Static IP | AWS Elastic IP |
+| Public IP | Auto-assigned public IPv4 (no Elastic IP; admin access via Tailscale) |
 
-### Home Storage Tier
+### Home Storage Tier (in progress)
 | Component | Technology |
 |---|---|
 | Host | Microsoft Surface Book 3 (Intel i7-1065G7, 32 GB RAM, 1 TB SSD) |
@@ -129,7 +126,7 @@ Nextcloud AIO Master Container
 
 ---
 
-## 🧱 Hybrid Storage: TrueNAS SCALE
+## 🧱 Hybrid Storage: TrueNAS SCALE (in progress)
 
 The goal: keep Nextcloud on EC2 as the single entry point, and move bulk files to ZFS storage at home.
 
@@ -148,17 +145,26 @@ My main machine didn't have the free space, so I repurposed a Surface Book 3. It
 | 4 | Enable the `cloudhub` SMB share and SMB service; write a test file | ✅ Done |
 | 5 | Confirm EC2 reaches TrueNAS over Tailscale on TCP 445 | ✅ Done |
 | 6 | Mount the share in Nextcloud via External Storage (SMB/CIFS) | ✅ Done |
-| 7 | Harden: daily ZFS snapshots, tighten the dataset ACL, verify no port forwarding | ✅ Done |
+| 7 | Harden: daily ZFS snapshots (2-week retention), remove `builtin_users` from the dataset ACL, restrict the Nextcloud mount to the admin account | ✅ Done |
 
-### Lessons learned
+### Lessons so far
 - **The pre-flight checks paid off.** The VM script refused to run on the first attempt because the host only had 131 GB free not enough for the planned 256 GB data disk plus margin. Dropping the data disk to 64 GB (dynamic, so it only grows as it fills) fixed it before anything was created.
-- **Tailscale needs host networking for this use case.** The TrueNAS Tailscale app's default (userspace) mode suits reaching the web UI, but Nextcloud needs to reach the SMB service on the TrueNAS host itself so the app runs with host network enabled and userspace disabled.
+- **Tailscale needs host networking for this use case.** The TrueNAS Tailscale app's default (userspace) mode suits reaching the web UI, but Nextcloud needs to reach the SMB service on the TrueNAS host itself — so the app runs with host network enabled and userspace disabled.
 - **If the NAS drops off the tailnet, restart the app first.** The app showed Running while the machine showed offline in the Tailscale console; a restart reconnected it.
+
+- **Caddy can manage Tailscale certificates itself.** Setting `TS_PERMIT_CERT_UID=caddy` lets Caddy fetch and auto-renew the `*.ts.net` certificate, replacing the manual `tailscale cert` step that expires every ~90 days.
+- **"Site can't be reached" was DNS, not the server.** `DNS_PROBE_FINISHED_NXDOMAIN` meant the laptop wasn't on the tailnet; once it was, MagicDNS resolved the name and Caddy answered.
+- **Tailscale SSH removes the dependency on port 22 and key files.** `tailscale up --ssh` let me reach the instance as `ssh ubuntu@cloudhub` even when its public IP changed.
+
+- **Verify the security group you actually got.** A port scan of the public IP showed 22 and 443 open: the instance had been launched with the wizard's default group, not the planned one. After removing both rules, a rescan showed 22, 80, 443, 8080, and 8443 all closed, while Nextcloud and SSH kept working over Tailscale.
+
+- **"Running" in AWS doesn't mean responsive.** After the security group change, the instance still showed Running but stopped answering over Tailscale. A reboot brought it back; `free -h` then showed 1.6 GB of 1.9 GB in use right after boot, so the t3.small's 2 GB RAM is tight for Nextcloud AIO. Restarting the containers brought it to 1.1 GB used with 2 GB swap as a buffer; turning off Office/Talk or moving to a t3.medium are the next levers.
+- **Least privilege on both ends.** The TrueNAS dataset ACL now grants write access only to `nextcloud-smb` (the default `builtin_users` entry was removed), and the Nextcloud mount is visible only to the admin account.
 
 ### Trade-offs
 - File transfers between AWS and home are limited by my home internet upload speed.
 - The NAS is only reachable while the laptop is awake and the VM is running.
-- The pool is a single virtual disk with no redundancy fine for a lab, not a backup on its own.
+- The pool is a single virtual disk with no redundancy — fine for a lab, not a backup on its own.
 
 ---
 
@@ -182,21 +188,24 @@ My main machine didn't have the free space, so I repurposed a Surface Book 3. It
 |---|---|
 | Name | `your-instance` |
 | AMI | Ubuntu Server 24.04 LTS (HVM) |
-| AMI ID | `ami-05cf1e9f73fbad2e2` |
+| AMI ID | Latest Ubuntu 24.04 LTS AMI for your region (AMI IDs are region-specific) |
 | Instance Type | `t3.small` (2 vCPU, 2 GB RAM) |
-| Region | us-east-1 (N. Virginia) |
+| Region | us-east-2 (Ohio) |
 | Storage | 30 GB gp3 |
 | Key Pair | `your-instance.pem` |
 
  
-**Security Group**
- 
+**Security Group (Tailscale-only)**
+
+CloudHUB is reached only over the tailnet, and Caddy uses Tailscale-issued certificates, so no web ports need to be open to the internet.
+
 | Port | Protocol | Source | Purpose |
 |---|---|---|---|
-| 22 | TCP | My IP | SSH admin access |
-| 443 | TCP | Anywhere | HTTPS web traffic |
-| 8080 | TCP | My IP | Nextcloud AIO dashboard |
-| 8443 | TCP | My IP | Nextcloud AIO dashboard HTTPS |
+| 22 | TCP | My IP | SSH admin access during setup (remove once Tailscale SSH works) |
+| 8080 | TCP | My IP | Nextcloud AIO setup interface (remove after initial setup) |
+| 41641 | UDP | Anywhere | *Optional:* lets Tailscale make direct peer connections instead of relaying through DERP |
+
+No rule for 80, 443, or 8443: all Nextcloud traffic arrives through the Tailscale tunnel. Outbound rules stay at the default (all traffic) so the instance can reach Tailscale, Docker Hub, and package mirrors.
 
 
 ### SSH Into the Instance
@@ -257,6 +266,33 @@ docker run \
   --volume /var/run/docker.sock:/var/run/docker.sock:ro \
   nextcloud/all-in-one:latest
 ```
+
+---
+
+### 🧱 Infrastructure as Code (Terraform)
+
+The [`terraform/`](terraform/) folder recreates the EC2 side of CloudHUB from scratch: the latest Ubuntu 24.04 AMI, a security group with **no inbound rules** (all outbound), an encrypted 30 GB gp3 volume, IMDSv2-only metadata, and no SSH key pair — admin access is Tailscale SSH only. A cloud-init script then installs swap, Docker, Tailscale (with `--ssh`), Caddy with auto-renewing Tailscale certificates, and the Nextcloud AIO master container.
+
+| File | Purpose |
+|---|---|
+| `versions.tf` | Terraform + AWS provider versions, default tags |
+| `variables.tf` | Region, instance type, disk/swap size, Tailscale auth key (sensitive) |
+| `main.tf` | AMI lookup, security group, EC2 instance |
+| `cloud-init.yaml.tftpl` | Bootstrap script, logged to `/var/log/cloudhub-setup.log` |
+| `outputs.tf` | Instance ID, IPs, next steps |
+| `terraform.tfvars.example` | Copy to `terraform.tfvars` (git-ignored) and fill in |
+
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars   # add a one-off Tailscale auth key
+terraform init
+terraform plan
+terraform apply
+# ...test it...
+terraform destroy
+```
+
+> The Tailscale auth key ends up in instance user data, so use a **single-use, short-expiry** key and never commit `terraform.tfvars`.
 
 ---
 
@@ -371,10 +407,10 @@ Host networking with userspace off is what lets Nextcloud reach the SMB service 
 NAS_IP="100.x.y.z"   # <-- your TrueNAS Tailscale IP
 
 if ! command -v tailscale >/dev/null 2>&1; then
-  echo "Tailscale is not installed on this host stop here."
+  echo "Tailscale is not installed on this host — stop here."
 else
   echo "== Tailscale ping to TrueNAS =="
-  sudo tailscale ping -c 3 "$NAS_IP" || echo "Ping failed check both machines show Connected."
+  sudo tailscale ping -c 3 "$NAS_IP" || echo "Ping failed — check both machines show Connected."
 
   echo "== SMB port 445 =="
   if command -v nc >/dev/null 2>&1; then
@@ -419,10 +455,10 @@ A green dot next to the mount means it's connected.
 |---|---|
 | EC2 t3.small | ~$15.00 |
 | EBS 30GB gp3 | ~$2.40 |
-| Elastic IP | $0.00 (attached) |
+| Public IPv4 address | ~$3.60 (AWS charges for all public IPv4 since Feb 2024) |
 | Data Transfer | ~$1–3.00 |
 | Tailscale | $0.00 (free plan) |
 | TrueNAS home tier | $0.00 (existing hardware, free Community Edition) |
-| **Total** | **~$18–20/mo** |
+| **Total** | **~$22–24/mo** |
 
 ---
