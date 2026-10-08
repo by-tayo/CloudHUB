@@ -1,4 +1,4 @@
-# ☁️ CloudHUB — Hybrid Self-Hosted Cloud
+# ☁️ CloudHUB
 
 
 <img width="400" height="351" alt="CloudHUB-removebg-preview" src="https://github.com/user-attachments/assets/5ecebe41-9061-41e6-bfcb-8501ae880667" />
