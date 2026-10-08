@@ -25,7 +25,7 @@
 
 CloudHUB is what I call my personal Nextcloud instance my private, self-hosted alternative to Google Drive, Microsoft 365, and other third-party productivity platforms. Rather than relying on external cloud providers, CloudHUB gives me full ownership and control over my files, documents, calendar, and communications.
 
-It runs on AWS EC2, is accessible only through Tailscale VPN, and serves as my central hub for all productivity work from writing and file management to video calls and collaborative documents.
+It runs on AWS EC2, is accessible only through Tailscale VPN, and serves as my central hub for all productivity work — from writing and file management to video calls and collaborative documents.
 
 **What's new:** the EC2 instance runs on a 30 GB EBS volume, so I'm adding a home **TrueNAS SCALE** server as a second storage tier. Nextcloud on EC2 stays the single front door; the TrueNAS share is mounted into it as external storage over Tailscale, so nothing on my home network is exposed to the internet.
 
@@ -63,8 +63,6 @@ Nextcloud AIO Master Container
                                                        └── Dataset tank/cloudhub → SMB share "cloudhub"
 ```
 
----
-
 ## 🛠️ Tech Stack
 
 ### Infrastructure
@@ -75,7 +73,7 @@ Nextcloud AIO Master Container
 | Storage | 30 GB gp3 EBS Volume |
 | Public IP | Auto-assigned public IPv4 (no Elastic IP; admin access via Tailscale) |
 
-### Home Storage Tier (in progress)
+### Home Storage Tier
 | Component | Technology |
 |---|---|
 | Host | Microsoft Surface Book 3 (Intel i7-1065G7, 32 GB RAM, 1 TB SSD) |
@@ -118,7 +116,7 @@ Nextcloud AIO Master Container
 - **Zero public exposure** — CloudHUB is not accessible from the public internet
 - **VPN-only access** — all traffic routes through Tailscale's encrypted WireGuard tunnel
 - **TLS encryption** — end-to-end HTTPS via Tailscale-issued certificates
-- **AWS Security Groups** — SSH restricted to admin IP; ports locked down
+- **AWS Security Groups** — zero inbound rules; SSH and HTTPS reach the instance only over Tailscale
 - **AIO Reverse Proxy Mode** — Caddy handles TLS termination, Nextcloud never directly exposed
 - **Private Magic DNS** — domain only resolvable inside the Tailscale network
 - **NAS reachable only over the tailnet** — the TrueNAS SMB share is reached at its Tailscale address; no ports are forwarded on the home router
@@ -126,14 +124,14 @@ Nextcloud AIO Master Container
 
 ---
 
-## 🧱 Hybrid Storage: TrueNAS SCALE (in progress)
+## 🧱 Hybrid Storage: TrueNAS SCALE
 
-The goal: keep Nextcloud on EC2 as the single entry point, and move bulk files to ZFS storage at home.
+Nextcloud on EC2 stays the single entry point, while bulk files live on ZFS storage at home. The TrueNAS share is mounted in Nextcloud as `/TrueNAS`, and I tested reads and writes in both directions.
 
 ### Why a VM on a laptop?
 My main machine didn't have the free space, so I repurposed a Surface Book 3. It has no Ethernet port (and TrueNAS doesn't support Wi-Fi) and only one internal drive, so instead of installing TrueNAS on the bare metal I run it as a **Hyper-V VM**. The VM uses Hyper-V's Default Switch for outbound internet; once Tailscale runs inside TrueNAS, everything else reaches it at its tailnet address.
 
-### Progress
+### Build log
 | Phase | Step | Status |
 |---|---|---|
 | 0 | Prepare host (no sleep while plugged in, lid does nothing), confirm Hyper-V | ✅ Done |
@@ -147,9 +145,9 @@ My main machine didn't have the free space, so I repurposed a Surface Book 3. It
 | 6 | Mount the share in Nextcloud via External Storage (SMB/CIFS) | ✅ Done |
 | 7 | Harden: daily ZFS snapshots (2-week retention), remove `builtin_users` from the dataset ACL, restrict the Nextcloud mount to the admin account | ✅ Done |
 
-### Lessons so far
-- **The pre-flight checks paid off.** The VM script refused to run on the first attempt because the host only had 131 GB free not enough for the planned 256 GB data disk plus margin. Dropping the data disk to 64 GB (dynamic, so it only grows as it fills) fixed it before anything was created.
-- **Tailscale needs host networking for this use case.** The TrueNAS Tailscale app's default (userspace) mode suits reaching the web UI, but Nextcloud needs to reach the SMB service on the TrueNAS host itself — so the app runs with host network enabled and userspace disabled.
+### Lessons
+- **The pre-flight checks paid off.** The VM script refused to run on the first attempt because the host only had 131 GB free — not enough for the planned 256 GB data disk plus margin. Dropping the data disk to 64 GB (dynamic, so it only grows as it fills) fixed it before anything was created.
+- **Tailscale needs host networking for this use case.** The TrueNAS Tailscale app's default (userspace) mode suits reaching the web UI, but Nextcloud needs to reach the SMB service on the TrueNAS host itself so the app runs with host network enabled and userspace disabled.
 - **If the NAS drops off the tailnet, restart the app first.** The app showed Running while the machine showed offline in the Tailscale console; a restart reconnected it.
 
 - **Caddy can manage Tailscale certificates itself.** Setting `TS_PERMIT_CERT_UID=caddy` lets Caddy fetch and auto-renew the `*.ts.net` certificate, replacing the manual `tailscale cert` step that expires every ~90 days.
@@ -160,11 +158,31 @@ My main machine didn't have the free space, so I repurposed a Surface Book 3. It
 
 - **"Running" in AWS doesn't mean responsive.** After the security group change, the instance still showed Running but stopped answering over Tailscale. A reboot brought it back; `free -h` then showed 1.6 GB of 1.9 GB in use right after boot, so the t3.small's 2 GB RAM is tight for Nextcloud AIO. Restarting the containers brought it to 1.1 GB used with 2 GB swap as a buffer; turning off Office/Talk or moving to a t3.medium are the next levers.
 - **Least privilege on both ends.** The TrueNAS dataset ACL now grants write access only to `nextcloud-smb` (the default `builtin_users` entry was removed), and the Nextcloud mount is visible only to the admin account.
+- **Rebuilding from code fixes the mistakes by design.** A Terraform test deploy (`cloudhub-tf`) came up with zero inbound rules on its own: the security group check returned `[]`, so the wizard-default problem above can't recur. With no manual steps, cloud-init finished with swap, Docker, Tailscale SSH, Caddy and its certificate, and the AIO master container, and the box joined the tailnet. The 502 on the new URL was expected, since Nextcloud only listens once the AIO setup has run. Terraform authenticates through an IAM Identity Center (SSO) profile rather than long-lived access keys, and the Tailscale key was single-use and ephemeral, so the test machine left the tailnet after `terraform destroy`.
 
 ### Trade-offs
 - File transfers between AWS and home are limited by my home internet upload speed.
 - The NAS is only reachable while the laptop is awake and the VM is running.
-- The pool is a single virtual disk with no redundancy — fine for a lab, not a backup on its own.
+- The pool is a single virtual disk with no redundancy fine for a lab, not a backup on its own.
+
+---
+
+## 🗺️ Roadmap
+
+Planned expansions, checked off as they ship.
+
+**Rebuild it right**
+- [x] Rebuild the EC2 stack with **Terraform** + cloud-init (instance, security group, EBS) so it can be recreated with one command
+- [x] Restrict the security group to Tailscale-only access and document the before/after
+
+**Protect the data**
+- [x] TrueNAS SCALE storage tier: ZFS pool, Tailscale, least-privilege SMB share (Phases 0–4)
+- [x] Connect EC2 to the TrueNAS share over Tailscale (Phases 5–6)
+- [ ] Nextcloud AIO **BorgBackup** to TrueNAS, with daily ZFS snapshots underneath
+- [ ] Offsite copy to S3 Glacier for a full 3-2-1 backup strategy
+
+**Extras**
+- [ ] Nextcloud Assistant backed by a local LLM (Ollama) — AI features without files leaving my infrastructure
 
 ---
 
@@ -222,8 +240,6 @@ sudo reboot
 ```
 
 ℹ️ After reboot, reconnect using the same SSH command.
-
-
 
 
 ### Quick Start
@@ -292,7 +308,17 @@ terraform apply
 terraform destroy
 ```
 
-> The Tailscale auth key ends up in instance user data, so use a **single-use, short-expiry** key and never commit `terraform.tfvars`.
+> The Tailscale auth key ends up in instance user data, so use a **single-use, ephemeral, short-expiry** key and never commit `terraform.tfvars`.
+
+**Authenticate with SSO, not access keys:**
+
+```bash
+aws configure sso          # session name: cloudhub-sso, region: us-east-2, profile: cloudhub
+aws sts get-caller-identity --profile cloudhub
+aws sso login --profile cloudhub   # when the session expires
+```
+
+**Verified test run:** `plan` showed 2 to add (security group + instance). After `apply`, the security group had no inbound rules, the instance showed Connected (Ephemeral, SSH) in Tailscale, `cloud-init status` returned `done`, the setup log ended with `CloudHUB setup finished`, a 2 GB swapfile was active, and the AIO login page loaded on port 8080 over Tailscale. Then `destroy` removed both resources.
 
 ---
 
@@ -332,7 +358,7 @@ A sleeping host pauses the VM and Nextcloud loses the share.
 
 **3. Create the VM** (PowerShell as Administrator):
 
-Pre-flight checks run first — the script stops before creating anything if the ISO is missing, the VM name is taken, the switch doesn't exist, or there isn't enough free disk space.
+Pre-flight checks run first the script stops before creating anything if the ISO is missing, the VM name is taken, the switch doesn't exist, or there isn't enough free disk space.
 ```powershell
 & {
   $VMName = "TrueNAS"
