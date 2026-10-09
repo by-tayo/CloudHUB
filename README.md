@@ -30,7 +30,7 @@ CloudHUB is my private, self-hosted alternative to Google Drive and Microsoft 36
 ## 🏗️ Architecture
 
 ```
-My devices ──(Tailscale, HTTPS via MagicDNS)──► Caddy (Tailscale TLS certs)
+My devices (Tailscale, HTTPS via MagicDNS)──► Caddy (Tailscale TLS certs)
                                                   │
                                                   ▼
                                     Nextcloud AIO on AWS EC2 (t3.small)
