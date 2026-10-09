@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars (which is git-ignored) and fill in.
+# Never commit terraform.tfvars: it contains your Tailscale auth key.
+
+region             = "us-east-2"
+aws_profile        = "cloudhub"
+name               = "cloudhub-tf"      # use a different name than your live instance while testing
+instance_type      = "t3.small"
+root_volume_gb     = 30
+swap_gb            = 2
+tailscale_auth_key = "tskey-auth-REPLACE-ME"
+
+# allow_tailscale_direct_udp = true   # optional: faster direct Tailscale connections

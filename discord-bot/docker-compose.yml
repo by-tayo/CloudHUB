@@ -1,0 +1,22 @@
+services:
+  cloudhub-bot:
+    build: .
+    container_name: cloudhub-bot
+    restart: unless-stopped
+    env_file: .env
+    # Host networking lets the bot resolve MagicDNS names and reach the
+    # tailnet (Ollama on the Surface) exactly like the EC2 host does.
+    # The bot only makes outbound connections; it listens on no ports.
+    network_mode: host
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 128m
+    volumes:
+      # An empty folder on the host's root disk. The bot only calls statvfs()
+      # on it to read free space, so it never sees any of the host's files.
+      - /opt/cloudhub-bot/probe:/host-root-probe:ro

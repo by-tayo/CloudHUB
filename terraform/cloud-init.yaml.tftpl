@@ -1,0 +1,94 @@
+#cloud-config
+# CloudHUB bootstrap: swap, Docker, Tailscale (with SSH), Caddy with
+# auto-renewing Tailscale certificates, and the Nextcloud AIO master container.
+# Progress is logged to /var/log/cloudhub-setup.log.
+
+package_update: true
+package_upgrade: true
+packages:
+  - curl
+  - ca-certificates
+  - gnupg
+  - python3
+
+write_files:
+  - path: /usr/local/sbin/cloudhub-setup.sh
+    permissions: "0700"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      exec >>/var/log/cloudhub-setup.log 2>&1
+      echo "=== CloudHUB setup started $(date -Is) ==="
+
+      # --- Swap ---------------------------------------------------------------
+      if ! swapon --show | grep -q /swapfile; then
+        fallocate -l ${swap_gb}G /swapfile
+        chmod 600 /swapfile
+        mkswap /swapfile
+        swapon /swapfile
+        grep -q /swapfile /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+        echo "Swap: ${swap_gb}G enabled"
+      fi
+
+      # --- Docker -------------------------------------------------------------
+      if ! command -v docker >/dev/null 2>&1; then
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+          > /etc/apt/sources.list.d/docker.list
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+        usermod -aG docker ubuntu
+        echo "Docker installed: $(docker --version)"
+      fi
+
+      # --- Tailscale ----------------------------------------------------------
+      if ! command -v tailscale >/dev/null 2>&1; then
+        curl -fsSL https://tailscale.com/install.sh | sh
+      fi
+      grep -q '^TS_PERMIT_CERT_UID=caddy' /etc/default/tailscaled 2>/dev/null \
+        || echo 'TS_PERMIT_CERT_UID=caddy' >> /etc/default/tailscaled
+      systemctl restart tailscaled
+      tailscale up --authkey='${tailscale_auth_key}' --hostname='${hostname}' --ssh
+
+      for i in $(seq 1 30); do
+        TS_NAME=$(tailscale status --json | python3 -c "import sys,json; print(json.load(sys.stdin)['Self']['DNSName'].rstrip('.'))" || true)
+        [ -n "$TS_NAME" ] && break
+        sleep 2
+      done
+      if [ -z "$TS_NAME" ]; then echo "ERROR: could not read Tailscale DNS name"; exit 1; fi
+      echo "Tailscale name: $TS_NAME"
+
+      # --- Caddy (auto TLS from Tailscale) -------------------------------------
+      if ! command -v caddy >/dev/null 2>&1; then
+        apt-get install -y debian-keyring debian-archive-keyring apt-transport-https
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
+        apt-get update
+        apt-get install -y caddy
+      fi
+      printf '%s {\n\treverse_proxy localhost:11000\n}\n' "$TS_NAME" > /etc/caddy/Caddyfile
+      caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      systemctl restart caddy
+
+      # --- Nextcloud AIO master container ------------------------------------
+      if ! docker ps -a --format '{{.Names}}' | grep -q '^nextcloud-aio-mastercontainer$'; then
+        docker run -d --init --sig-proxy=false \
+          --name nextcloud-aio-mastercontainer \
+          --restart always \
+          --publish 8080:8080 \
+          --env APACHE_PORT=11000 \
+          --env APACHE_IP_BINDING=127.0.0.1 \
+          --env SKIP_DOMAIN_VALIDATION=true \
+          --volume nextcloud_aio_mastercontainer:/mnt/docker-aio-config \
+          --volume /var/run/docker.sock:/var/run/docker.sock:ro \
+          nextcloud/all-in-one:latest
+      fi
+
+      echo "https://$TS_NAME" > /root/cloudhub-url.txt
+      echo "=== CloudHUB setup finished $(date -Is): https://$TS_NAME ==="
+
+runcmd:
+  - [bash, /usr/local/sbin/cloudhub-setup.sh]
